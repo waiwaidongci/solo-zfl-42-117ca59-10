@@ -51,11 +51,49 @@
     dialog::backdrop { background: rgba(0, 0, 0, 0.3); }
     .dialog-body { padding: 16px; display: grid; gap: 10px; }
     .empty { color: var(--muted); font-size: 13px; padding: 8px 0; }
+    nav.tabs { display: flex; gap: 8px; }
+    nav.tabs button { background: #e3ece8; color: var(--teal); padding: 8px 16px; border-radius: 20px; font-weight: 600; }
+    nav.tabs button.active { background: var(--teal); color: #fff; }
+    .view { display: none; }
+    .view.active { display: block; }
+    .lic-layout { display: grid; grid-template-columns: 340px 1fr; gap: 18px; align-items: start; }
+    .lic-list { display: grid; gap: 10px; max-height: 720px; overflow-y: auto; padding-right: 4px; }
+    .lic-card { border: 1px solid #d7e0dc; border-left: 4px solid var(--violet); background: #fff; border-radius: 7px; padding: 10px 11px; cursor: pointer; }
+    .lic-card.exclusive { border-left-color: var(--red); }
+    .lic-card.terminated { opacity: 0.62; border-left-color: var(--muted); }
+    .lic-card.sel { outline: 2px solid var(--teal); }
+    .lic-card h3 { margin: 0 0 5px; font-size: 15px; display: flex; justify-content: space-between; gap: 6px; }
+    .badge { display: inline-block; font-size: 11px; border-radius: 10px; padding: 2px 8px; white-space: nowrap; }
+    .badge.excl { background: #f6e2e2; color: var(--red); }
+    .badge.norm { background: #e4e9f5; color: var(--violet); }
+    .badge.term { background: #ececec; color: #555; }
+    .badge.act { background: #dff0e7; color: #1e6b45; }
+    .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 16px; font-size: 13px; }
+    .detail-grid dt { color: var(--muted); } .detail-grid dd { margin: 0; }
+    table.roy { width: 100%; border-collapse: collapse; font-size: 13px; }
+    table.roy th, table.roy td { border-bottom: 1px solid var(--line); padding: 6px 8px; text-align: right; }
+    table.roy th:first-child, table.roy td:first-child { text-align: left; }
+    table.roy tfoot td { font-weight: 700; background: #f4f8f6; }
+    .history { border-left: 3px solid var(--line); margin-left: 6px; padding-left: 12px; display: grid; gap: 8px; }
+    .history .ev { position: relative; font-size: 13px; }
+    .history .ev::before { content: ""; position: absolute; left: -18px; top: 4px; width: 9px; height: 9px; border-radius: 50%; background: var(--violet); }
+    .history .ev.terminate::before { background: var(--red); }
+    .history .ev.renewal::before { background: var(--teal); }
+    .toast { position: fixed; right: 22px; bottom: 22px; display: grid; gap: 8px; z-index: 99; }
+    .toast .msg { background: #26312e; color: #fff; padding: 10px 14px; border-radius: 7px; font-size: 13px; max-width: 420px; white-space: pre-wrap; }
+    .toast .msg.err { background: #7a2f31; }
+    .toast .msg.ok { background: #1e5f46; }
+    .chips { display: flex; flex-wrap: wrap; gap: 5px; }
+    .chips span { background: #eef3f0; border: 1px solid var(--line); border-radius: 11px; padding: 2px 9px; font-size: 12px; }
+    .tiers-row { display: grid; grid-template-columns: 1fr 1fr 40px; gap: 6px; align-items: center; }
+    .tiers-row label { font-size: 11px; }
+    .errbox { background: #f8e7e7; border: 1px solid #d9a3a4; border-radius: 7px; padding: 9px 11px; font-size: 13px; color: #7a2f31; max-height: 230px; overflow: auto; white-space: pre-wrap; }
+    .offline { background: #fbf3df; border: 1px solid #d8bf7f; border-radius: 8px; padding: 14px; margin: 14px 28px; color: #6b531a; }
     @media (max-width: 980px) {
       header { display: block; padding: 18px; }
       main { padding: 16px; }
-      .top, .lists, .toolbar { grid-template-columns: 1fr; }
-      .grid2 { grid-template-columns: 1fr; }
+      .top, .lists, .toolbar, .lic-layout { grid-template-columns: 1fr; }
+      .grid2, .detail-grid { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -64,11 +102,16 @@
     <div>
       <h1>小型漆线雕工坊管理</h1>
       <div class="sub">贴线、阴干、上金粉、待交付的作品流转与缺陷追踪</div>
+      <nav class="tabs" style="margin-top:10px">
+        <button id="tabWork" class="active" type="button">工坊看板</button>
+        <button id="tabLic" type="button">版权授权台</button>
+      </nav>
     </div>
     <button id="exportBtn" class="secondary">导出 JSON</button>
   </header>
 
   <main>
+   <section id="viewWork" class="view active">
     <section class="top">
       <form id="workForm" class="panel">
         <h2>新增作品</h2>
@@ -118,6 +161,79 @@
         <div id="board" class="board"></div>
       </section>
     </section>
+   </section>
+
+   <section id="viewLic" class="view">
+     <div id="licOffline" class="offline" hidden>
+       授权台需要数据服务支持。请在本目录运行 <b>node licensing/server.js</b>，然后访问
+       <b>http://localhost:4217/</b>（直接双击打开 index.html 时授权台不可用，工坊看板仍可离线使用）。
+     </div>
+     <div id="licApp" hidden>
+     <div class="lic-layout">
+      <!-- 左：登记与列表 -->
+      <div style="display:grid;gap:14px">
+       <form id="motifForm" class="panel">
+         <h2>纹样作者登记</h2>
+         <div class="grid2">
+           <label>纹样名称<input name="name" required placeholder="缠枝莲"></label>
+           <label>作者<input name="author" required placeholder="庄淑敏"></label>
+         </div>
+         <div class="grid2">
+           <label>题材风格<input name="style" placeholder="缠枝花卉"></label>
+           <label>登记日期<input name="registeredAt" type="date"></label>
+         </div>
+         <label>备注<input name="note" placeholder="创作说明"></label>
+         <button type="submit">登记纹样</button>
+       </form>
+
+       <form id="licenseForm" class="panel">
+         <h2>新增授权</h2>
+         <label>纹样<select name="motifId" required></select></label>
+         <label>被授权方<input name="licensee" required placeholder="厦门鹭艺礼品有限公司"></label>
+         <div class="grid2">
+           <label>授权方式<select name="exclusive"><option value="true">独占授权</option><option value="false">普通（非独占）</option></select></label>
+           <label>年保底（元，0=无）<input name="guarantee" type="number" min="0" step="100" value="0"></label>
+         </div>
+         <div class="grid2">
+           <label>起始日期<input name="startDate" type="date" required></label>
+           <label>到期日期<input name="endDate" type="date" required></label>
+         </div>
+         <label>可用地区（逗号分隔）<input name="regions" required placeholder="福建, 浙江"></label>
+         <label>可用品类（逗号分隔）<input name="categories" required placeholder="摆件, 挂件"></label>
+         <div>
+           <div class="meta" style="margin-bottom:5px">阶梯费率（超额累进，按每期净销售额）</div>
+           <div id="tiersEditor" style="display:grid;gap:6px"></div>
+           <button type="button" id="addTier" class="secondary" style="margin-top:6px">+ 加一档</button>
+         </div>
+         <button type="submit">提交授权（自动查重叠）</button>
+       </form>
+
+       <section class="panel">
+         <h2>批量导入授权</h2>
+         <div class="meta" style="margin-bottom:8px">JSON 数组，字段同单条：motifId / licensee / exclusive / regions / categories / startDate / endDate / guarantee。任一条失败则整批回滚。</div>
+         <textarea id="batchInput" style="width:100%;min-height:120px" placeholder='[{"motifId":"M1",...}]'></textarea>
+         <div style="display:flex;gap:8px;margin-top:8px">
+           <button type="button" id="batchBtn" class="violet">整批导入</button>
+           <button type="button" id="batchSample" class="secondary">填入示例</button>
+         </div>
+         <div id="batchResult" style="margin-top:10px"></div>
+       </section>
+      </div>
+
+      <!-- 右：授权列表 + 详情 -->
+      <div style="display:grid;gap:14px">
+       <section class="panel">
+         <h2>授权台账 <span class="meta" id="licToday"></span></h2>
+         <div id="licenseList" class="lic-list"></div>
+       </section>
+       <section class="panel" id="detailPanel">
+         <h2>授权详情与版税</h2>
+         <div id="licenseDetail"><div class="empty">点击左侧任一授权查看详情、历史与计提</div></div>
+       </section>
+      </div>
+     </div>
+     </div>
+   </section>
   </main>
 
   <dialog id="detailDialog">
@@ -133,6 +249,19 @@
       </div>
     </div>
   </dialog>
+
+  <dialog id="licDialog">
+    <form method="dialog" class="dialog-body" id="licDialogForm">
+      <h2 id="licDialogTitle"></h2>
+      <div id="licDialogFields" style="display:grid;gap:10px"></div>
+      <div class="actions">
+        <button id="licDialogOk" value="ok" class="violet">确定</button>
+        <button value="cancel" class="secondary" formnovalidate>取消</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div class="toast" id="toast"></div>
 
   <script>
     const statuses = ["贴线中", "待阴干", "上金粉", "待交付"];
@@ -284,6 +413,399 @@
     window.showDetail = showDetail;
     save();
     render();
+  </script>
+
+  <script>
+  (() => {
+    "use strict";
+    const $ = s => document.querySelector(s);
+    const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    const money = n => "¥" + Number(n || 0).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    let state = null;
+    let selectedId = null;
+
+    function toast(message, kind = "ok", ms = 4200) {
+      const el = document.createElement("div");
+      el.className = `msg ${kind}`;
+      el.textContent = message;
+      $("#toast").appendChild(el);
+      setTimeout(() => el.remove(), ms);
+    }
+    async function api(method, path, body) {
+      const res = await fetch(path, {
+        method,
+        headers: body ? { "content-type": "application/json" } : undefined,
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const err = new Error(data?.error?.message || `请求失败 (${res.status})`);
+        err.status = res.status; err.code = data?.error?.code; err.details = data?.error?.details;
+        throw err;
+      }
+      return data;
+    }
+    async function refresh() {
+      state = await api("GET", "/api/state");
+      $("#licOffline").hidden = true;
+      $("#licApp").hidden = false;
+      if (!state.licenses.some(l => l.id === selectedId)) selectedId = state.licenses[0]?.id || null;
+      renderAll();
+    }
+
+    // ---- 视图切换 ----
+    $("#tabWork").addEventListener("click", () => switchTab("work"));
+    $("#tabLic").addEventListener("click", () => switchTab("lic"));
+    function switchTab(which) {
+      $("#viewWork").classList.toggle("active", which === "work");
+      $("#viewLic").classList.toggle("active", which === "lic");
+      $("#tabWork").classList.toggle("active", which === "work");
+      $("#tabLic").classList.toggle("active", which === "lic");
+    }
+    const oldExport = $("#exportBtn");
+    oldExport.addEventListener("click", async e => {
+      if ($("#viewLic").classList.contains("active")) {
+        e.stopImmediatePropagation();
+        e.preventDefault();
+        const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
+        const link = document.createElement("a");
+        link.href = URL.createObjectURL(blob);
+        link.download = "pattern-licenses.json";
+        link.click();
+        URL.revokeObjectURL(link.href);
+      }
+    }, true);
+
+    // ---- 阶梯费率编辑器 ----
+    const defaultTiers = [
+      { upTo: 10000, rate: 0.05 },
+      { upTo: 50000, rate: 0.08 },
+      { upTo: null, rate: 0.1 },
+    ];
+    function tiersHtml(tiers = defaultTiers) {
+      return tiers.map((t, i) => `
+        <div class="tiers-row" data-i="${i}">
+          <label>本档上限（空=无上限）<input class="t-up" type="number" min="0" step="1000" value="${t.upTo ?? ""}"></label>
+          <label>费率（0~1）<input class="t-rate" type="number" min="0" max="1" step="0.01" value="${t.rate}" required></label>
+          <button type="button" class="secondary t-del" title="删除">×</button>
+        </div>`).join("");
+    }
+    function readTiers() {
+      return [...document.querySelectorAll("#tiersEditor .tiers-row")].map(row => ({
+        upTo: row.querySelector(".t-up").value === "" ? null : Number(row.querySelector(".t-up").value),
+        rate: Number(row.querySelector(".t-rate").value),
+      }));
+    }
+    $("#tiersEditor").innerHTML = tiersHtml();
+    $("#addTier").addEventListener("click", () => {
+      const wrap = document.createElement("div");
+      wrap.innerHTML = tiersHtml([{ upTo: null, rate: 0.1 }]).trim();
+      const row = wrap.firstChild;
+      $("#tiersEditor").appendChild(row);
+      bindDel(row);
+    });
+    function bindDel(row) {
+      row.querySelector(".t-del").addEventListener("click", () => {
+        if (document.querySelectorAll("#tiersEditor .tiers-row").length > 1) row.remove();
+        else toast("至少保留一档费率", "err");
+      });
+    }
+    document.querySelectorAll("#tiersEditor .t-del").forEach(b => b.addEventListener("click", function () {
+      const row = this.closest(".tiers-row");
+      if (document.querySelectorAll("#tiersEditor .tiers-row").length > 1) row.remove();
+      else toast("至少保留一档费率", "err");
+    }));
+
+    // ---- 表单默认日期 ----
+    const today = "2026-09-15";
+    document.querySelector("#motifForm input[name=registeredAt]").value = today;
+    const lf = $("#licenseForm");
+    lf.startDate.value = "2026-10-01";
+    lf.endDate.value = "2027-09-30";
+
+    // ---- 纹样登记 ----
+    $("#motifForm").addEventListener("submit", async e => {
+      e.preventDefault();
+      const f = e.target;
+      const d = Object.fromEntries(new FormData(f).entries());
+      try {
+        await api("POST", "/api/motifs", d);
+        toast(`纹样「${d.name}」已登记`);
+        f.reset();
+        f.registeredAt.value = today;
+        await refresh();
+      } catch (err) { toast(err.message, "err", 6000); }
+    });
+
+    // ---- 新增授权 ----
+    lf.addEventListener("submit", async e => {
+      e.preventDefault();
+      const d = Object.fromEntries(new FormData(lf).entries());
+      const body = {
+        motifId: d.motifId,
+        licensee: d.licensee,
+        exclusive: d.exclusive === "true",
+        guarantee: Number(d.guarantee || 0),
+        startDate: d.startDate,
+        endDate: d.endDate,
+        regions: d.regions.split(/[,，]/).map(s => s.trim()).filter(Boolean),
+        categories: d.categories.split(/[,，]/).map(s => s.trim()).filter(Boolean),
+        tiers: readTiers(),
+      };
+      try {
+        const r = await api("POST", "/api/licenses", body);
+        toast(`授权 ${r.license.id} 已创建（独占冲突服务端已校验）`);
+        selectedId = r.license.id;
+        await refresh();
+      } catch (err) { toast(err.message, "err", 7000); }
+    });
+
+    // ---- 通用对话框 ----
+    function openDialog({ title, fields, submitLabel = "确定", onSubmit }) {
+      $("#licDialogTitle").textContent = title;
+      $("#licDialogOk").textContent = submitLabel;
+      const box = $("#licDialogFields");
+      box.innerHTML = fields.map(f => {
+        if (f.type === "html") return `<div class="meta">${f.html}</div>`;
+        if (f.type === "select") {
+          return `<label>${esc(f.label)}<select name="${f.name}">${f.options.map(o => `<option value="${esc(o.value)}" ${o.value === f.value ? "selected" : ""}>${esc(o.text)}</option>`).join("")}</select></label>`;
+        }
+        return `<label>${esc(f.label)}<input name="${f.name}" type="${f.type || "text"}" value="${esc(f.value ?? "")}" placeholder="${esc(f.placeholder || "")}" ${f.required ? "required" : ""}></label>`;
+      }).join("");
+      const dlg = $("#licDialog");
+      const form = $("#licDialogForm");
+      async function handler(ev) {
+        if ((ev.submitter?.value || "ok") !== "ok") { form.removeEventListener("submit", handler); return; }
+        ev.preventDefault();
+        const data = Object.fromEntries(new FormData(form).entries());
+        try {
+          await onSubmit(data);
+          form.removeEventListener("submit", handler);
+          dlg.close();
+        } catch (err) { toast(err.message, "err", 7000); }
+      }
+      form.addEventListener("submit", handler);
+      dlg.showModal();
+    }
+
+    // ---- 授权操作 ----
+    function getSel() { return state.licenses.find(l => l.id === selectedId); }
+    window.licRenew = () => {
+      const l = getSel();
+      openDialog({
+        title: `续期 ${l.id}（历史将保留）`,
+        fields: [
+          { label: `当前到期日：${l.effectiveEnd}`, type: "html", html: `当前到期日：<b>${l.effectiveEnd}</b>` },
+          { name: "endDate", label: "续期后到期日（必须晚于当前）", type: "date", value: l.effectiveEnd.replace(/(\d{4})-(\d{2})-(\d{2})/, (_, y) => `${Number(y) + 1}-01-31`), required: true },
+          { name: "note", label: "备注", value: `续期审批 ${today}` },
+        ],
+        submitLabel: "提交续期",
+        onSubmit: d => api("POST", `/api/licenses/${l.id}/renew`, d).then(() => { toast("续期成功"); return refresh(); }),
+      });
+    };
+    window.licTerminate = () => {
+      const l = getSel();
+      openDialog({
+        title: `终止 ${l.id}（终止后仍保留全部历史）`,
+        fields: [
+          { name: "date", label: "终止生效日期", type: "date", value: today, required: true },
+          { name: "reason", label: "终止原因", placeholder: "商家调整品类 / 违约收回", required: true },
+        ],
+        submitLabel: "确认终止",
+        onSubmit: d => api("POST", `/api/licenses/${l.id}/terminate`, d).then(() => { toast("授权已终止"); return refresh(); }),
+      });
+    };
+    window.licChange = () => {
+      const l = getSel();
+      openDialog({
+        title: `变更 ${l.id} 权利要素`,
+        fields: [
+          { name: "licensee", label: "被授权方", value: l.licensee },
+          { name: "regions", label: "可用地区（逗号分隔）", value: l.regions.join(", ") },
+          { name: "categories", label: "可用品类（逗号分隔）", value: l.categories.join(", ") },
+          { name: "guarantee", label: "年保底（元）", type: "number", value: l.guarantee },
+          { type: "select", name: "exclusive", label: "授权方式", value: String(l.exclusive), options: [{ value: "true", text: "独占授权" }, { value: "false", text: "普通授权" }] },
+          { name: "reason", label: "变更原因", value: "合同补充协议" },
+        ],
+        submitLabel: "提交变更",
+        onSubmit: d => api("POST", `/api/licenses/${l.id}/change`, {
+          reason: d.reason,
+          patch: {
+            licensee: d.licensee,
+            regions: d.regions.split(/[,，]/).map(s => s.trim()).filter(Boolean),
+            categories: d.categories.split(/[,，]/).map(s => s.trim()).filter(Boolean),
+            guarantee: Number(d.guarantee),
+            exclusive: d.exclusive === "true",
+          },
+        }).then(() => { toast("变更已记录（若造成冲突将被拒绝并回滚）"); return refresh(); }),
+      });
+    };
+    window.licReportSale = () => {
+      const l = getSel();
+      openDialog({
+        title: `${l.id} 回款销量上报（阶梯计提）`,
+        fields: [
+          { name: "period", label: "销售账期", value: "2026-03", placeholder: "YYYY-MM", required: true },
+          { name: "amount", label: "本期回款销售额（元）", type: "number", required: true, placeholder: "60000" },
+          { name: "units", label: "销售件数", type: "number", value: 0 },
+          { name: "idempotencyKey", label: "上报凭证号（防重复）", required: true, value: "S-" + crypto.randomUUID().slice(0, 8) },
+        ],
+        submitLabel: "提交上报",
+        onSubmit: d => api("POST", "/api/reports/sales", {
+          licenseId: l.id, period: d.period.trim(),
+          amount: Number(d.amount), units: Number(d.units || 0),
+          idempotencyKey: d.idempotencyKey.trim(),
+        }).then(r => {
+          toast(r.duplicated ? "凭证号重复：返回原记录，未重复计提" : `已计提，本期该笔版税 ${money(r.royalty.fee)}`);
+          return refresh();
+        }),
+      });
+    };
+    window.licReportReturn = () => {
+      const l = getSel();
+      const sales = state.reports.filter(r => r.licenseId === l.id && r.kind === "sale");
+      if (!sales.length) { toast("该授权还没有销售上报，无法退货", "err"); return; }
+      openDialog({
+        title: `${l.id} 退货冲减（按原销售账期逐期冲回）`,
+        fields: [
+          { type: "select", name: "originalReportId", label: "原销售上报（跨授权会被拒绝）", options: sales.map(s => ({ value: s.id, text: `${s.id} · ${s.period} · ${money(s.amount)} · 凭证 ${s.idempotencyKey}` })) },
+          { name: "amount", label: "退货金额（元）", type: "number", required: true },
+          { name: "units", label: "退货件数", type: "number", value: 0 },
+          { name: "returnId", label: "退货单号（防重复）", required: true, value: "RT-" + crypto.randomUUID().slice(0, 8) },
+        ],
+        submitLabel: "提交退货",
+        onSubmit: d => api("POST", "/api/reports/return", {
+          licenseId: l.id, originalReportId: d.originalReportId,
+          amount: Number(d.amount), units: Number(d.units || 0), returnId: d.returnId.trim(),
+        }).then(r => { toast(`已按 ${r.report.originPeriod} 账期冲减，版税冲回 ${money(r.reversal)}（保底不回退）`); return refresh(); }),
+      });
+    };
+
+    // ---- 批量导入 ----
+    $("#batchSample").addEventListener("click", () => {
+      $("#batchInput").value = JSON.stringify([
+        { motifId: "M3", licensee: "批量样例-杭州文玩阁", exclusive: false, regions: ["浙江"], categories: ["挂件", "首饰"], startDate: "2026-04-01", endDate: "2026-12-31", guarantee: 0 },
+        { motifId: "M1", licensee: "批量样例-故意冲突", exclusive: true, regions: ["福建"], categories: ["摆件"], startDate: "2026-05-01", endDate: "2026-07-31", guarantee: 0 },
+      ], null, 2);
+    });
+    $("#batchBtn").addEventListener("click", async () => {
+      let items;
+      try { items = JSON.parse($("#batchInput").value); } catch { $("#batchResult").innerHTML = `<div class="errbox">JSON 解析失败，请检查格式</div>`; return; }
+      if (!Array.isArray(items)) { $("#batchResult").innerHTML = `<div class="errbox">顶层必须是数组</div>`; return; }
+      try {
+        const r = await api("POST", "/api/batch/licenses", { items });
+        $("#batchResult").innerHTML = `<div class="badge act">成功导入 ${r.imported} 条</div>`;
+        toast(`批量导入成功：${r.imported} 条`);
+        await refresh();
+      } catch (err) {
+        const fails = err.details?.failures || [];
+        const lines = fails.map(f => `第 ${f.index + 1} 条 [${f.code}]：${f.message}`);
+        $("#batchResult").innerHTML = `<div class="errbox"><b>整批回滚，未写入任何记录</b>\n\n${lines.join("\n\n") || esc(err.message)}</div>`;
+        toast(err.message, "err", 6000);
+      }
+    });
+
+    // ---- 渲染 ----
+    function motifName(id) { return state.motifs.find(m => m.id === id)?.name || id; }
+    function renderMotifSelect() {
+      lf.querySelector("select[name=motifId]").innerHTML = state.motifs
+        .map(m => `<option value="${m.id}">${esc(m.id)} · ${esc(m.name)}（${esc(m.author)}）</option>`).join("");
+    }
+    window.selectLicense = id => { selectedId = id; renderAll(); };
+    function renderList() {
+      const sorted = [...state.licenses].sort((a, b) => a.startDate < b.startDate ? 1 : -1);
+      $("#licenseList").innerHTML = sorted.map(l => `
+        <article class="lic-card ${l.exclusive ? "exclusive" : ""} ${l.status === "terminated" ? "terminated" : ""} ${l.id === selectedId ? "sel" : ""}" onclick="selectLicense('${l.id}')">
+          <h3><span>${esc(motifName(l.motifId))} · ${esc(l.id)}</span>
+            <span class="badge ${l.exclusive ? "excl" : "norm"}">${l.exclusive ? "独占" : "普通"}</span></h3>
+          <div class="meta">${esc(l.licensee)}</div>
+          <div class="meta">${l.startDate} ~ ${l.effectiveEnd}${l.status === "terminated" ? `（${l.terminateDate} 终止）` : ""}</div>
+          <div class="chips" style="margin-top:5px">
+            ${l.regions.concat(l.categories).map(x => `<span>${esc(x)}</span>`).join("")}
+          </div>
+        </article>`).join("") || `<div class="empty">暂无授权</div>`;
+    }
+    function typeLabel(t) { return { create: "设立", renewal: "续期", terminate: "终止", change: "变更" }[t] || t; }
+    function renderDetail() {
+      const l = getSel();
+      $("#licToday").textContent = `· 计提账期基准日 ${state.today}`;
+      if (!l) { $("#licenseDetail").innerHTML = `<div class="empty">暂无授权</div>`; return; }
+      const m = state.motifs.find(x => x.id === l.motifId);
+      const roy = state.royalties[l.id];
+      const tierText = l.tiers.map(t => `${(t.rate * 100).toFixed(t.rate * 100 % 1 ? 1 : 0)}%（≤${t.upTo === null ? "∞" : money(t.upTo)}）`).join(" → ");
+      const hist = [...l.versions].reverse();
+      $("#licenseDetail").innerHTML = `
+        <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center">
+          <div><b style="font-size:16px">${esc(l.id)} · ${esc(m?.name || "")}</b>
+            <span class="badge ${l.exclusive ? "excl" : "norm"}">${l.exclusive ? "独占授权" : "普通授权"}</span>
+            <span class="badge ${l.status === "terminated" ? "term" : "act"}">${l.status === "terminated" ? "已终止 " + l.terminateDate : "生效中"}</span>
+          </div>
+          <div class="actions" style="margin:0">
+            <button class="secondary" onclick="licRenew()" ${l.status === "terminated" ? "disabled" : ""}>续期</button>
+            <button class="danger" onclick="licTerminate()" ${l.status === "terminated" ? "disabled" : ""}>终止</button>
+            <button class="warn" onclick="licChange()" ${l.status === "terminated" ? "disabled" : ""}>变更</button>
+            <button class="violet" onclick="licReportSale()">上报销量</button>
+            <button class="secondary" onclick="licReportReturn()">退货冲减</button>
+          </div>
+        </div>
+        <dl class="detail-grid" style="margin:12px 0">
+          <dt>作者</dt><dd>${esc(m?.author || "")}${m?.style ? "（" + esc(m.style) + "）" : ""}</dd>
+          <dt>被授权方</dt><dd>${esc(l.licensee)}</dd>
+          <dt>权利期</dt><dd>${l.startDate} ~ ${l.effectiveEnd}${l.status === "terminated" ? `，${l.terminateDate} 提前终止（原因：${esc(l.terminateReason)}）` : ""}</dd>
+          <dt>登记时间</dt><dd>${l.createdAt?.slice(0, 10)}</dd>
+          <dt>可用地区</dt><dd>${l.regions.map(esc).join("、")}</dd>
+          <dt>可用品类</dt><dd>${l.categories.map(esc).join("、")}</dd>
+          <dt>阶梯费率</dt><dd>${esc(tierText)}</dd>
+          <dt>年度保底</dt><dd>${money(l.guarantee)}（月保底 ${money(roy.floor)}，不足部分当月抵扣补足）</dd>
+        </dl>
+        <h3 style="margin:14px 0 6px;font-size:15px">逐期版税计提（退货按原账期冲减）</h3>
+        <table class="roy">
+          <thead><tr><th>账期</th><th>销售</th><th>退货</th><th>净额</th><th>计提版税</th><th>保底抵扣</th><th>应付合计</th></tr></thead>
+          <tbody>${roy.rows.map(r => `<tr${r.net < 0 ? ' style="color:var(--red)"' : ""}><td>${r.period}</td><td>${money(r.sales)}</td><td>${money(r.returns)}</td><td>${money(r.net)}</td><td>${money(r.earnedRoyalty)}</td><td>${money(r.guaranteeOffset)}</td><td>${money(r.payable)}</td></tr>`).join("")}</tbody>
+          <tfoot><tr><td>累计</td><td>${money(roy.total.sales)}</td><td>${money(roy.total.returns)}</td><td>${money(roy.total.net)}</td><td>${money(roy.total.earnedRoyalty)}</td><td>${money(roy.total.guaranteeOffset)}</td><td>${money(roy.total.payable)}</td></tr></tfoot>
+        </table>
+        <h3 style="margin:14px 0 6px;font-size:15px">上报流水</h3>
+        <div class="meta" style="display:grid;gap:4px">
+          ${state.reports.filter(r => r.licenseId === l.id).map(r => r.kind === "sale"
+            ? `<div>▸ ${r.period} 销售 ${money(r.amount)}（${r.units || 0}件）凭证 ${esc(r.idempotencyKey)} · 记录 ${r.id}</div>`
+            : `<div style="color:var(--red)">↩ 退货 ${money(r.amount)}（${r.units || 0}件）单 ${esc(r.returnId)} → 冲回 ${esc(r.originPeriod)} 账期，版税 ${money(r.reversal)}，原销售 ${r.originalReportId}</div>`)
+            .join("") || "<div>无</div>"}
+        </div>
+        <h3 style="margin:14px 0 6px;font-size:15px">权利历史（续期 / 终止 / 变更全程留痕）</h3>
+        <div class="history">
+          ${hist.map(v => {
+            let detail = "";
+            if (v.type === "create") detail = `设立授权，到期 ${v.endDate}`;
+            if (v.type === "renewal") detail = `${v.startDate} 起续期至 ${v.endDate}`;
+            if (v.type === "terminate") detail = `${v.terminateDate} 终止：${esc(v.note)}`;
+            if (v.type === "change") {
+              const b = v.snapshot.before, a = v.snapshot.after;
+              const diffs = [];
+              if (b.regions.join("/") !== a.regions.join("/")) diffs.push(`地区：${b.regions.join("/")} → ${a.regions.join("/")}`);
+              if (b.categories.join("/") !== a.categories.join("/")) diffs.push(`品类：${b.categories.join("/")} → ${a.categories.join("/")}`);
+              if (b.exclusive !== a.exclusive) diffs.push(`方式：${b.exclusive ? "独占" : "普通"} → ${a.exclusive ? "独占" : "普通"}`);
+              if (b.guarantee !== a.guarantee) diffs.push(`保底：${b.guarantee} → ${a.guarantee}`);
+              if (b.licensee !== a.licensee) diffs.push(`被授权方：${b.licensee} → ${a.licensee}`);
+              detail = diffs.join("；") || "要素无变化";
+            }
+            return `<div class="ev ${v.type}"><b>${typeLabel(v.type)}</b> · ${v.at.replace("T", " ").slice(0, 16)}<br><span class="meta">${detail}<br>${esc(v.note)}</span></div>`;
+          }).join("")}
+        </div>`;
+    }
+    function renderAll() {
+      renderMotifSelect();
+      renderList();
+      renderDetail();
+    }
+
+    // ---- 启动 ----
+    refresh().catch(() => {
+      $("#licOffline").hidden = false;
+      $("#licApp").hidden = true;
+      // 切到授权台时给出提示
+      $("#tabLic").addEventListener("click", () => toast("授权台服务未连接：请运行 node licensing/server.js", "err", 5000), { once: true });
+    });
+  })();
   </script>
 </body>
 </html>
