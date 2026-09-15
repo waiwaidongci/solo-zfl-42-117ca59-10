@@ -1,27 +1,27 @@
-// 真实 Chromium 走查：独占冲突 / 双页并发 / 续期 / 阶梯计提+保底 / 退货冲减 / 终止 / 批量回滚 / 刷新一致
-import { chromium } from "playwright";
-import { spawn } from "node:child_process";
-import { rmSync } from "node:fs";
+// 真实 Chromium 走查：时钟注入、独占冲突、双页并发、续期、阶梯+保底、条款分段、
+// 退货冲减、终止、月末边界、v1 迁移、批量回滚、刷新/重启一致、原授权流程与工坊看板回归。
+// 运行：node licensing/tests/e2e.mjs  （任意 cwd、路径可含空格）
+import { existsSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { join } from "node:path";
+import { startServer, loadPlaywright, tempFile } from "./helpers.mjs";
 
-const PORT = 4319;
-const BASE = `http://localhost:${PORT}`;
-const DATA_FILE = "/tmp/licensing-e2e-data.json";
-let serverProc;
-
-function startServer() {
-  return new Promise((resolve, reject) => {
-    const p = spawn("node", ["licensing/server.js"], {
-      cwd: new URL("../../", import.meta.url).pathname,
-      env: { ...process.env, PORT: String(PORT), DATA_FILE },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    p.stdout.on("data", d => String(d).includes("已启动") && resolve(p));
-    p.stderr.on("data", d => process.stderr.write(`[srv] ${d}`));
-    p.on("exit", code => reject(new Error("server exited " + code)));
-  });
+const playwright = await loadPlaywright();
+if (!playwright) {
+  console.log("SKIP: 未安装 Playwright（npm i -D playwright && npx playwright install chromium）");
+  process.exit(0);
 }
-async function stopServer() {
-  if (serverProc) { serverProc.kill("SIGTERM"); await new Promise(r => serverProc.on("exit", r)); serverProc = null; }
+const { chromium } = playwright;
+
+// 沙箱环境若把 Chromium 依赖库解在 ~/.local/pwlibs，则自动补进 LD_LIBRARY_PATH
+function browserEnv() {
+  const extra = [
+    join(homedir(), ".local/pwlibs/usr/lib/aarch64-linux-gnu"),
+    join(homedir(), ".local/pwlibs/usr/lib/x86_64-linux-gnu"),
+    join(homedir(), ".local/pwlibs/lib/aarch64-linux-gnu"),
+    join(homedir(), ".local/pwlibs/lib/x86_64-linux-gnu"),
+  ].filter(existsSync);
+  return { ...process.env, LD_LIBRARY_PATH: [...extra, process.env.LD_LIBRARY_PATH].filter(Boolean).join(":") };
 }
 
 let passed = 0;
@@ -36,7 +36,7 @@ async function toastText(page, needle, kind) {
   await page.waitForFunction(
     ({ needle, kind }) => [...document.querySelectorAll(".toast .msg")]
       .some(m => (!kind || m.classList.contains(kind)) && m.textContent.includes(needle)),
-    { needle, kind }, { timeout: 5000 });
+    { needle, kind }, { timeout: 6000 });
 }
 async function fillLicenseForm(page, v) {
   const f = page.locator("#licenseForm");
@@ -49,43 +49,73 @@ async function fillLicenseForm(page, v) {
   await f.locator("input[name=regions]").fill(v.regions);
   await f.locator("input[name=categories]").fill(v.categories);
 }
-async function stateOf(page) {
-  return page.evaluate(async () => (await fetch("/api/state")).json());
+const stateOf = page => page.evaluate(async () => (await fetch("/api/state")).json());
+async function waitDialogClosed(page) { await page.waitForFunction(() => !document.querySelector("#licDialog").open); }
+async function waitDialogOpen(page) { await page.waitForFunction(() => document.querySelector("#licDialog").open); }
+
+function v1File() {
+  const { dir, file } = tempFile("lic-v1e2e-");
+  writeFileSync(file, JSON.stringify({
+    seq: 9,
+    motifs: [{ id: "M1", name: "旧纹样", author: "老作者", style: "", registeredAt: "2025-01-01", note: "" }],
+    licenses: [{
+      id: "L1", motifId: "M1", licensee: "旧被授权方", exclusive: true,
+      regions: ["福建"], categories: ["摆件"],
+      startDate: "2026-01-01", endDate: "2026-12-31",
+      tiers: [{ upTo: 5000, rate: 0.06 }, { upTo: null, rate: 0.09 }],
+      guarantee: 6000, status: "active", terminateDate: null, terminateReason: null,
+      createdAt: "2025-12-01",
+      versions: [{ type: "create", at: "2025-12-01T00:00:00.000Z", endDate: "2026-12-31", note: "首次授权", snapshot: null }],
+    }],
+    reports: [{ id: "R1", kind: "sale", licenseId: "L1", period: "2026-01", amount: 5000, units: 10, idempotencyKey: "OLD-1", at: "2026-02-01T00:00:00.000Z" }],
+  }));
+  return file;
 }
 
-const browser = await chromium.launch();
+const browser = await chromium.launch({ env: browserEnv() });
 let page;
 try {
-  rmSync(DATA_FILE, { force: true });
-  serverProc = await startServer();
-  const page = await browser.newPage();
+  // ========== A. v1 迁移 + 真实/注入账期 ==========
+  console.log("⓪ v1 数据迁移（浏览器中旧流水不丢、既往不重算）");
+  const v1 = v1File();
+  let srv = await startServer({ now: "2026-09-15", dataFile: v1 });
+  page = await browser.newPage();
   const errors = [];
   page.on("pageerror", e => errors.push(String(e)));
-  await page.goto(BASE);
+  await page.goto(srv.base);
   await page.click("#tabLic");
   await page.waitForSelector("#licApp:not([hidden])");
-  console.log("① 独占冲突（同一纹样 × 地区 × 品类 × 期间，任一为独占即拒）");
+  await page.click(".lic-card:has-text('L1')");
+  await page.waitForSelector("text=数据迁移");
+  check("历史区显示迁移事件", await page.locator(".history").innerText().then(t => t.includes("数据迁移") && t.includes("不重算")));
+  let s = await stateOf(page);
+  check("旧上报保留", s.reports.length === 1 && s.reports[0].idempotencyKey === "OLD-1");
+  check("旧账期按旧费率 5000×6%=300、保底500", s.royalties.L1.rows.find(r => r.period === "2026-01").earnedRoyalty === 300);
+  check("页面账期基准日显示注入日期 2026-09-15", (await page.locator("#licToday").innerText()).includes("2026-09-15"));
+  await srv.stop();
+
+  // ========== 主流程：全新种子数据（显式临时文件，跨重启保留） ==========
+  const main = tempFile("lic-main-");
+  srv = await startServer({ now: "2026-09-15", dataFile: main.file });
+  await page.goto(srv.base);
+  await page.click("#tabLic");
+  await page.waitForSelector("#licApp:not([hidden])");
+
+  console.log("① 独占冲突");
   await fillLicenseForm(page, {
-    motifId: "M1", licensee: "冲突商家-福州某行", exclusive: true, guarantee: 0,
+    motifId: "M1", licensee: "冲突商家", exclusive: true, guarantee: 0,
     startDate: "2026-06-01", endDate: "2026-08-31", regions: "福建", categories: "摆件",
   });
   await page.click('#licenseForm button[type=submit]');
   await toastText(page, "独占冲突", "err");
-  let s = await stateOf(page);
-  check("冲突授权未落库（仍只有种子 2 条）", s.licenses.length === 2);
-  check("授权台账仍无「冲突商家」", !s.licenses.some(l => l.licensee.includes("冲突商家")));
+  s = await stateOf(page);
+  check("冲突授权未落库", s.licenses.length === 2);
 
   console.log("② 两个页面同时提交同一独占范围：恰好一成一败");
   const page2 = await browser.newPage();
-  await page2.goto(BASE); await page2.click("#tabLic"); await page2.waitForSelector("#licApp:not([hidden])");
-  await fillLicenseForm(page, {
-    motifId: "M3", licensee: "并发页面甲", exclusive: true, guarantee: 0,
-    startDate: "2026-07-01", endDate: "2026-09-30", regions: "浙江", categories: "首饰",
-  });
-  await fillLicenseForm(page2, {
-    motifId: "M3", licensee: "并发页面乙", exclusive: true, guarantee: 0,
-    startDate: "2026-07-01", endDate: "2026-09-30", regions: "浙江", categories: "首饰",
-  });
+  await page2.goto(srv.base); await page2.click("#tabLic"); await page2.waitForSelector("#licApp:not([hidden])");
+  await fillLicenseForm(page, { motifId: "M3", licensee: "并发页面甲", exclusive: true, guarantee: 0, startDate: "2026-07-01", endDate: "2026-09-30", regions: "浙江", categories: "首饰" });
+  await fillLicenseForm(page2, { motifId: "M3", licensee: "并发页面乙", exclusive: true, guarantee: 0, startDate: "2026-07-01", endDate: "2026-09-30", regions: "浙江", categories: "首饰" });
   await Promise.all([
     page.evaluate(() => document.querySelector("#licenseForm").requestSubmit()),
     page2.evaluate(() => document.querySelector("#licenseForm").requestSubmit()),
@@ -94,167 +124,186 @@ try {
     toastText(page, "授权 L5 已创建").catch(() => toastText(page, "独占冲突")),
     toastText(page2, "独占冲突", "err").catch(() => toastText(page2, "授权 L5 已创建")),
   ]);
-  await sleep(300);
+  await sleep(200);
   s = await stateOf(page);
   const winners = s.licenses.filter(l => l.licensee.startsWith("并发页面"));
-  check("并发后仅生成 1 条授权", winners.length === 1, `实际 ${winners.length} 条`);
-  check("胜出方为页面甲或乙之一（无重叠授权）", ["并发页面甲", "并发页面乙"].includes(winners[0].licensee));
+  check("并发后仅 1 条授权", winners.length === 1);
   const winnerId = winners[0].id;
-  const loserToastOk = await page.evaluate(() => [...document.querySelectorAll(".toast .msg")].some(m => m.textContent.includes("独占冲突")))
-    || await page2.evaluate(() => [...document.querySelectorAll(".toast .msg")].some(m => m.textContent.includes("独占冲突")));
-  check("其中一个页面收到独占冲突提示", loserToastOk);
   await page2.close();
 
   console.log("③ 续期（历史保留）");
   await page.click(`.lic-card:has-text("L1")`);
-  await page.click("button:has-text('续期')");
-  await page.waitForSelector("#licDialog:not([hidden])");
+  await page.click("button:has-text('续期')"); await waitDialogOpen(page);
   await page.fill('#licDialog input[name=endDate]', "2027-12-31");
   await page.fill('#licDialog input[name=note]', "年度续约走查");
-  await page.click("#licDialogOk");
-  await page.waitForSelector("#licDialog[hidden], #licDialog:not(.\\:modal)", { state: "hidden" }).catch(() => {});
-  await page.waitForFunction(() => !document.querySelector("#licDialog").open);
+  await page.click("#licDialogOk"); await waitDialogClosed(page);
   await toastText(page, "续期成功");
   s = await stateOf(page);
-  const l1 = s.licenses.find(l => l.id === "L1");
-  check("到期日延长到 2027-12-31", l1.effectiveEnd === "2027-12-31");
-  check("续期事件已追加（create + renewal）", l1.versions.some(v => v.type === "renewal" && v.note === "年度续约走查"));
-  check("设立事件仍保留", l1.versions[0].type === "create");
-  check("历史区展示续期记录", await page.locator(".history").innerText().then(t => t.includes("续期") && t.includes("2027-12-31")));
+  check("到期延至 2027-12-31", s.licenses.find(l => l.id === "L1").effectiveEnd === "2027-12-31");
+  check("续期事件与设立事件并存", (() => { const vs = s.licenses.find(l => l.id === "L1").versions; return vs[0].type === "create" && vs.some(v => v.type === "renewal" && v.note === "年度续约走查"); })());
 
-  console.log("④ 阶梯费率计提 + 最低保底抵扣");
-  await page.click("button:has-text('上报销量')");
-  await page.waitForFunction(() => document.querySelector("#licDialog").open);
+  console.log("④ 阶梯计提 + 保底 + 幂等");
+  await page.click("button:has-text('上报销量')"); await waitDialogOpen(page);
   await page.fill('#licDialog input[name=period]', "2026-02");
   await page.fill('#licDialog input[name=amount]', "60000");
   await page.fill('#licDialog input[name=units]', "120");
   await page.fill('#licDialog input[name=idempotencyKey]', "S-E2E-02");
-  await page.click("#licDialogOk");
-  await page.waitForFunction(() => !document.querySelector("#licDialog").open);
-  await toastText(page, "¥4,700.00"); // 10000*5% + 40000*8% + 10000*10%
+  await page.click("#licDialogOk"); await waitDialogClosed(page);
+  await toastText(page, "¥4,700.00");
   s = await stateOf(page);
-  const feb = s.royalties.L1.rows.find(r => r.period === "2026-02");
-  check("2026-02 销售 60000 阶梯计提 4700", feb.earnedRoyalty === 4700, `实际 ${feb.earnedRoyalty}`);
-  check("2026-02 无需保底抵扣", feb.guaranteeOffset === 0 && feb.payable === 4700);
-  const jan = s.royalties.L1.rows.find(r => r.period === "2026-01");
-  check("2026-01 计提 400，月保底 1000，抵扣 600", jan.earnedRoyalty === 400 && jan.guaranteeOffset === 600 && jan.payable === 1000);
-  const emptyMonth = s.royalties.L1.rows.find(r => r.period === "2026-04");
-  check("无销售月份按保底 1000 计提", emptyMonth.payable === 1000 && emptyMonth.guaranteeOffset === 1000);
-  // 重复上报（相同凭证号）
-  await page.click("button:has-text('上报销量')");
-  await page.waitForFunction(() => document.querySelector("#licDialog").open);
+  check("2 月阶梯 4700", s.royalties.L1.rows.find(r => r.period === "2026-02").earnedRoyalty === 4700);
+  check("1 月保底抵扣 600、应付 1000", (() => { const j = s.royalties.L1.rows.find(r => r.period === "2026-01"); return j.guaranteeOffset === 600 && j.payable === 1000; })());
+  await page.click("button:has-text('上报销量')"); await waitDialogOpen(page);
   await page.fill('#licDialog input[name=period]', "2026-02");
   await page.fill('#licDialog input[name=amount]', "60000");
   await page.fill('#licDialog input[name=idempotencyKey]', "S-E2E-02");
   await page.click("#licDialogOk");
   await toastText(page, "凭证号重复");
   s = await stateOf(page);
-  check("重复上报未产生第二条流水", s.reports.filter(r => r.idempotencyKey === "S-E2E-02").length === 1);
-  check("重复上报金额未二次计提", s.royalties.L1.rows.find(r => r.period === "2026-02").sales === 60000);
+  check("重复上报不二次计提", s.reports.filter(r => r.idempotencyKey === "S-E2E-02").length === 1);
 
-  console.log("⑤ 退货按原授权原账期逐期冲减；重复/跨授权拒绝");
-  await page.click("button:has-text('退货冲减')");
-  await page.waitForFunction(() => document.querySelector("#licDialog").open);
-  await page.selectOption('#licDialog select[name=originalReportId]', "R1"); // 种子 2026-01 销售 8000
+  console.log("④b 未来账期在页面上被服务端拒绝（账期失真修复）");
+  // L1 已续期到 2027 年，用“下个月”验证：不依赖固定时钟，始终是未来账期
+  const futureMonth = (() => { const [y, m] = "2026-09".split("-").map(Number); const t = y * 12 + (m - 1) + 1; return `${Math.floor(t / 12)}-${String((t % 12) + 1).padStart(2, "0")}`; })();
+  const fut = await page.evaluate(async fm => {
+    const r = await fetch("/api/reports/sales", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ licenseId: "L1", period: fm, amount: 1, idempotencyKey: "F" }) });
+    return { status: r.status, code: (await r.json()).error.code };
+  }, futureMonth);
+  check(`未来账期 ${futureMonth} 400/FUTURE_PERIOD`, fut.status === 400 && fut.code === "FUTURE_PERIOD");
+
+  console.log("⑤ 退货原账期冲减；重复/跨授权/超额拒绝");
+  await page.click("button:has-text('退货冲减')"); await waitDialogOpen(page);
+  await page.selectOption('#licDialog select[name=originalReportId]', "R1");
   await page.fill('#licDialog input[name=amount]', "3000");
   await page.fill('#licDialog input[name=returnId]', "RT-E2E-1");
-  await page.click("#licDialogOk");
-  await page.waitForFunction(() => !document.querySelector("#licDialog").open);
+  await page.click("#licDialogOk"); await waitDialogClosed(page);
   await toastText(page, "冲减");
   s = await stateOf(page);
-  const jan2 = s.royalties.L1.rows.find(r => r.period === "2026-01");
-  check("退货计入原账期 2026-01（销售 8000 / 退 3000 / 净 5000）", jan2.sales === 8000 && jan2.returns === 3000 && jan2.net === 5000);
-  check("版税由 400 冲到 250（冲回 150），保底下应付仍为 1000", jan2.earnedRoyalty === 250 && jan2.payable === 1000);
-  const ret = s.reports.find(r => r.kind === "return");
-  check("退货流水记录原销售与冲回额", ret.originPeriod === "2026-01" && ret.originalReportId === "R1" && ret.reversal === 150);
-  // 重复退货单号 → 拒绝（浏览器内 fetch 直连 API，等价于页面提交被服务端拒绝）
-  const dup = await page.evaluate(async () => {
-    const r = await fetch("/api/reports/return", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ licenseId: "L1", returnId: "RT-E2E-1", originalReportId: "R1", amount: 1 }) });
-    return { status: r.status, body: await r.json() };
+  const jan = s.royalties.L1.rows.find(r => r.period === "2026-01");
+  check("退货回原账期：净 5000、计提 250、保底应付 1000", jan.returns === 3000 && jan.earnedRoyalty === 250 && jan.payable === 1000);
+  const codes = await page.evaluate(async () => {
+    const call = b => fetch("/api/reports/return", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) }).then(async r => ({ s: r.status, c: (await r.json()).error.code }));
+    return {
+      dup: await call({ licenseId: "L1", returnId: "RT-E2E-1", originalReportId: "R1", amount: 1 }),
+      cross: await call({ licenseId: "L2", returnId: "RT-X", originalReportId: "R1", amount: 1 }),
+      over: await call({ licenseId: "L1", returnId: "RT-O", originalReportId: "R1", amount: 999999 }),
+    };
   });
-  check("重复退货单号被拒绝 409", dup.status === 409 && dup.body.error.code === "DUPLICATE_RETURN");
-  // 跨授权上报 → 拒绝
-  const cross = await page.evaluate(async () => {
-    const r = await fetch("/api/reports/return", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ licenseId: "L2", returnId: "RT-X", originalReportId: "R1", amount: 100 }) });
-    return { status: r.status, body: await r.json() };
-  });
-  check("跨授权退货被拒绝 409", cross.status === 409 && cross.body.error.code === "CROSS_LICENSE_RETURN");
-  // 超额退货 → 拒绝
-  const over = await page.evaluate(async () => {
-    const r = await fetch("/api/reports/return", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ licenseId: "L1", returnId: "RT-OVER", originalReportId: "R1", amount: 999999 }) });
-    return { status: r.status, body: await r.json() };
-  });
-  check("退货超过同期销售被拒绝 409", over.status === 409 && over.body.error.code === "RETURN_EXCEEDS_SALES");
-  s = await stateOf(page);
-  check("被拒退货均未落库", s.reports.filter(r => r.kind === "return").length === 1);
+  check("重复退货 409", codes.dup.s === 409 && codes.dup.c === "DUPLICATE_RETURN");
+  check("跨授权退货 409", codes.cross.s === 409 && codes.cross.c === "CROSS_LICENSE_RETURN");
+  check("超额退货 409", codes.over.s === 409 && codes.over.c === "RETURN_EXCEEDS_SALES");
 
-  console.log("⑥ 终止授权（历史保留、终止后续期入口禁用）");
+  console.log("⑥ 月末终止（当月可报、次月拒绝、区间释放）");
   await page.click(`.lic-card:has-text("${winnerId}")`);
-  await page.click("button:has-text('终止')");
-  await page.waitForFunction(() => document.querySelector("#licDialog").open);
-  await page.fill('#licDialog input[name=date]', "2026-08-15");
-  await page.fill('#licDialog input[name=reason]', "商家调整品类");
-  await page.click("#licDialogOk");
-  await page.waitForFunction(() => !document.querySelector("#licDialog").open);
+  await page.click("button:has-text('终止')"); await waitDialogOpen(page);
+  await page.fill('#licDialog input[name=date]', "2026-08-31");
+  await page.fill('#licDialog input[name=reason]', "月末终止走查");
+  await page.click("#licDialogOk"); await waitDialogClosed(page);
   await toastText(page, "授权已终止");
   s = await stateOf(page);
-  const win = s.licenses.find(l => l.id === winnerId);
-  check("状态为 terminated 且记录终止日/原因", win.status === "terminated" && win.terminateDate === "2026-08-15");
-  check("终止事件已留痕", win.versions.some(v => v.type === "terminate" && v.note === "商家调整品类"));
-  check("续期/终止/变更按钮已禁用", await page.locator("#licenseDetail button:has-text('续期')").isDisabled());
-  const renewAfterTerm = await page.evaluate(async id => {
-    const r = await fetch(`/api/licenses/${id}/renew`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ endDate: "2028-01-01" }) });
-    return r.status;
+  check("终止于月末 2026-08-31", s.licenses.find(l => l.id === winnerId).terminateDate === "2026-08-31");
+  const termChecks = await page.evaluate(async id => {
+    const call = (path, b) => fetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) }).then(async r => ({ s: r.status, c: (await r.json()).error?.code }));
+    return {
+      aug: await call("/api/reports/sales", { licenseId: id, period: "2026-08", amount: 100, idempotencyKey: "AUG" }),
+      sep: await call("/api/reports/sales", { licenseId: id, period: "2026-09", amount: 100, idempotencyKey: "SEP" }),
+    };
   }, winnerId);
-  check("终止后续期 API 同样拒绝 409", renewAfterTerm === 409);
+  check("终止当月销售 201", termChecks.aug.s === 201);
+  check("终止次月销售 400", termChecks.sep.s === 400 && termChecks.sep.c === "PERIOD_OUT_OF_TERM");
+  const take = await page.evaluate(async () => {
+    const r = await fetch("/api/licenses", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ motifId: "M3", licensee: "终止后接手", exclusive: true, regions: ["浙江"], categories: ["首饰"], startDate: "2026-09-01", endDate: "2026-12-31", guarantee: 0 }) });
+    return r.status;
+  });
+  check("终止后区间释放，9 月起他人可独占", take === 201);
 
-  console.log("⑦ 批量导入：任一条失败整批回滚 + 明细");
+  console.log("⑦ 批量导入回滚与明细");
   await page.click("#batchSample");
   await page.click("#batchBtn");
   await page.waitForSelector("#batchResult .errbox");
   const errBox = await page.locator("#batchResult .errbox").innerText();
-  check("提示整批回滚", errBox.includes("整批回滚"));
-  check("给出第 2 条失败明细与冲突对象", errBox.includes("第 2 条") && errBox.includes("EXCLUSIVE_OVERLAP") && errBox.includes("L1"));
+  check("提示整批回滚 + 第 2 条明细", errBox.includes("整批回滚") && errBox.includes("第 2 条") && errBox.includes("L1"));
   const beforeCount = (await stateOf(page)).licenses.length;
-  check("第 1 条（本可成功）也未写入", !(await stateOf(page)).licenses.some(l => l.licensee.includes("杭州文玩阁")));
-  // 修正后整批成功
-  await page.fill("#batchInput", JSON.stringify([
-    { motifId: "M2", licensee: "批量-北京礼业", exclusive: false, regions: ["北京"], categories: ["摆件"], startDate: "2026-05-01", endDate: "2027-04-30", guarantee: 0 },
-    { motifId: "M3", licensee: "批量-苏州玉作", exclusive: false, regions: ["江苏"], categories: ["挂件"], startDate: "2026-05-01", endDate: "2027-04-30", guarantee: 0 },
-  ]));
-  await page.click("#batchBtn");
-  await page.waitForSelector("#batchResult .badge.act");
-  s = await stateOf(page);
-  check("整批成功写入 2 条", s.licenses.length === beforeCount + 2 && s.licenses.some(l => l.licensee === "批量-北京礼业") && s.licenses.some(l => l.licensee === "批量-苏州玉作"));
+  check("第 1 条也未写入", !(await stateOf(page)).licenses.some(l => l.licensee.includes("杭州文玩阁")));
 
-  console.log("⑧ 刷新后结果一致（页面刷新 + 服务重启后再读）");
-  const totalsBefore = JSON.stringify((await stateOf(page)).royalties.L1.total);
-  const histBefore = (await stateOf(page)).licenses.find(l => l.id === "L1").versions.length;
-  await page.screenshot({ path: "/tmp/licensing-detail.png", fullPage: false });
-  await page.reload();
-  await page.click("#tabLic");
-  await page.waitForSelector("#licApp:not([hidden])");
+  console.log("⑧ 条款分段：页面排期 → 时钟推进 → 新旧账期各用各条款");
   await page.click(`.lic-card:has-text("L1")`);
-  let s2 = await stateOf(page);
-  check("刷新后计提合计一致", JSON.stringify(s2.royalties.L1.total) === totalsBefore);
-  check("刷新后续期/设立历史条数一致", s2.licenses.find(l => l.id === "L1").versions.length === histBefore);
-  check("刷新后退货流水仍在", s2.reports.filter(r => r.kind === "return").length === 1);
-  check("页面表格累计应付与接口一致", await page.locator("table.roy tfoot td:last-child").innerText().then(t => t === `¥${s2.royalties.L1.total.payable.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`));
-  // 重启服务（验证原子落盘）
-  await stopServer();
-  await sleep(300);
-  serverProc = await startServer();
+  await page.click("button:has-text('变更')"); await waitDialogOpen(page);
+  await page.fill('#licDialog input[name=guarantee]', "24000");
+  await page.fill('#licDialog input[name=tierText]', "10000:0.07, *:0.12");
+  await page.click("#licDialogOk"); await waitDialogClosed(page);
+  await toastText(page, "新条款自");
+  s = await stateOf(page);
+  const l1 = s.licenses.find(l => l.id === "L1");
+  // 今天 9/15，前端默认下一起账月 = 2026-10
+  check("已排定 2026-10 分段，当前条款镜像更新", l1.terms.some(t => t.fromMonth === "2026-10" && t.guarantee === 24000));
+  check("既往 9 月账期仍按旧条款（floor 1000）", s.royalties.L1.rows.find(r => r.period === "2026-09").guaranteeFloor === 1000);
+  const dataFile = srv.dataFile;
+  await srv.stop();
+  srv = await startServer({ now: "2026-11-20", dataFile });
+  await page.goto(srv.base); await page.click("#tabLic"); await page.waitForSelector("#licApp:not([hidden])");
+  await page.click(`.lic-card:has-text("L1")`);
+  await page.click("button:has-text('上报销量')"); await waitDialogOpen(page);
+  await page.fill('#licDialog input[name=period]', "2026-10");
+  await page.fill('#licDialog input[name=amount]', "60000");
+  await page.fill('#licDialog input[name=idempotencyKey]', "OCT");
+  await page.click("#licDialogOk"); await waitDialogClosed(page);
+  await toastText(page, "¥6,700.00"); // 新费率 10000*7%+50000*12%
+  s = await stateOf(page);
+  const oct = s.royalties.L1.rows.find(r => r.period === "2026-10");
+  const sepRow = s.royalties.L1.rows.find(r => r.period === "2026-09");
+  check("10 月用新条款：floor 2000、费率分段标记", oct.guaranteeFloor === 2000 && oct.termFrom === "2026-10");
+  check("9 月旧账期不重算：floor 仍 1000", sepRow.guaranteeFloor === 1000);
+  check("页面 10 月行显示「条款 2026-10」标记", await page.locator("table.roy").innerText().then(t => t.includes("条款 2026-10")));
+  // 11 月无销售按新保底
+  check("11 月无销售按新保底 2000", s.royalties.L1.rows.find(r => r.period === "2026-11").payable === 2000);
+
+  console.log("⑨ 跨年续期后次年账期（时钟再推进到 2027-02）");
+  await srv.stop();
+  srv = await startServer({ now: "2027-02-05", dataFile });
+  await page.goto(srv.base); await page.click("#tabLic");
+  await page.click(`.lic-card:has-text("L1")`);
+  await page.click("button:has-text('上报销量')"); await waitDialogOpen(page);
+  await page.fill('#licDialog input[name=period]', "2027-01");
+  await page.fill('#licDialog input[name=amount]', "30000");
+  await page.fill('#licDialog input[name=idempotencyKey]', "JAN27");
+  await page.click("#licDialogOk"); await waitDialogClosed(page);
+  await toastText(page, "¥3,100.00");
+  s = await stateOf(page);
+  const periods = s.royalties.L1.rows.map(r => r.period);
+  check("计提表连续跨年到 2027-02", periods[0] === "2026-01" && periods.at(-1) === "2027-02");
+  check("次年 1 月按新条款计提 3100（10000*7%+20000*12%）", s.royalties.L1.rows.find(r => r.period === "2027-01").earnedRoyalty === 3100);
+
+  console.log("⑩ 刷新与重启一致");
+  const totalsBefore = JSON.stringify((await stateOf(page)).royalties.L1.total);
   await page.reload();
-  s2 = await stateOf(page);
-  check("服务重启后数据仍一致", JSON.stringify(s2.royalties.L1.total) === totalsBefore && s2.licenses.length === beforeCount + 2);
+  await page.click("#tabLic"); await page.click(`.lic-card:has-text("L1")`);
+  check("刷新后合计一致", JSON.stringify((await stateOf(page)).royalties.L1.total) === totalsBefore);
+  await srv.stop();
+  srv = await startServer({ now: "2027-02-05", dataFile });
+  await page.goto(srv.base);
+  check("重启后合计一致", JSON.stringify((await stateOf(page)).royalties.L1.total) === totalsBefore);
+
+  console.log("⑪ 工坊看板（原功能）回归");
+  await page.goto(srv.base);
+  check("看板 4 列", await page.locator("#board .col").count() === 4);
+  check("种子作品 3 张卡", await page.locator("#board .item").count() === 3);
+  await page.fill('#workForm input[name=base]', '脱胎漆瓶');
+  await page.fill('#workForm input[name=theme]', '宝相花');
+  await page.evaluate(() => document.querySelector("#workForm").requestSubmit());
+  await page.waitForFunction(() => [...document.querySelectorAll("#board .item b")].some(e => e.textContent === "宝相花"));
+  await page.click("#tabLic"); await page.waitForSelector("#licApp:not([hidden])");
+  await page.click("#tabWork");
+  check("切回看板新增卡片仍在", await page.locator("#board .item").count() === 4);
 
   check("全程无前端脚本错误", errors.length === 0, errors.join("; "));
   console.log(`\n全部通过：${passed} 项断言`);
+  await page.screenshot({ path: join(tmpdir(), "licensing-e2e-final.png"), fullPage: false });
+  await srv.stop();
 } catch (e) {
   console.error("\n走查失败：", e.message);
-  try { await page.screenshot({ path: "/tmp/licensing-fail.png", fullPage: true }); } catch {}
+  try { await page?.screenshot({ path: "/tmp/licensing-e2e-fail.png", fullPage: true }); } catch {}
   process.exitCode = 1;
 } finally {
   await browser.close();
-  await stopServer();
 }

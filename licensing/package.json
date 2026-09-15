@@ -1,16 +1,23 @@
 {
-  "name": "licensing",
-  "version": "1.0.0",
-  "main": "index.js",
+  "name": "lacquer-pattern-licensing",
+  "version": "2.0.0",
+  "description": "漆线雕工坊 · 纹样版权授权与版税计提台（零依赖 Node 服务）",
+  "type": "module",
+  "main": "server.js",
   "scripts": {
-    "test": "node tests/api.test.mjs",
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node --test tests/api.test.mjs",
+    "test:e2e": "node tests/e2e.mjs",
+    "test:all": "node tests/run-all.mjs"
   },
-  "keywords": [],
+  "keywords": [
+    "版权",
+    "版税",
+    "阶梯费率",
+    "独占授权"
+  ],
   "author": "",
   "license": "ISC",
-  "description": "",
-  "type": "module",
   "devDependencies": {
     "playwright": "^1.63.0"
   }

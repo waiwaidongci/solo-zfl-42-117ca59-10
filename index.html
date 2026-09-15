@@ -449,9 +449,11 @@
       state = await api("GET", "/api/state");
       $("#licOffline").hidden = true;
       $("#licApp").hidden = false;
+      if (!defaultsAligned) { applyServerDefaults(); defaultsAligned = true; }
       if (!state.licenses.some(l => l.id === selectedId)) selectedId = state.licenses[0]?.id || null;
       renderAll();
     }
+    let defaultsAligned = false;
 
     // ---- 视图切换 ----
     $("#tabWork").addEventListener("click", () => switchTab("work"));
@@ -516,12 +518,26 @@
       else toast("至少保留一档费率", "err");
     }));
 
-    // ---- 表单默认日期 ----
-    const today = "2026-09-15";
+    // ---- 表单默认日期：以真实本地日期/服务端账期为准 ----
+    function localDateString(d) {
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    }
+    function addMonthStr(m, n) {
+      const [y, mo] = m.split("-").map(Number);
+      const total = y * 12 + (mo - 1) + n;
+      return `${Math.floor(total / 12)}-${String((total % 12) + 1).padStart(2, "0")}`;
+    }
+    const today = localDateString(new Date());
     document.querySelector("#motifForm input[name=registeredAt]").value = today;
     const lf = $("#licenseForm");
-    lf.startDate.value = "2026-10-01";
-    lf.endDate.value = "2027-09-30";
+    // 授权表单默认日期在首次拿到服务端账期后按真实账期对齐
+    function applyServerDefaults() {
+      const t = state?.today || today;
+      const startMonth = addMonthStr(t.slice(0, 7), 1);
+      lf.startDate.value = `${startMonth}-01`;
+      lf.endDate.value = `${addMonthStr(startMonth, 12)}-01`;
+    }
+    applyServerDefaults();
 
     // ---- 纹样登记 ----
     $("#motifForm").addEventListener("submit", async e => {
@@ -617,35 +633,51 @@
     };
     window.licChange = () => {
       const l = getSel();
+      const nextMonth = addMonthStr(state.today.slice(0, 7), 1);
       openDialog({
         title: `变更 ${l.id} 权利要素`,
         fields: [
           { name: "licensee", label: "被授权方", value: l.licensee },
           { name: "regions", label: "可用地区（逗号分隔）", value: l.regions.join(", ") },
           { name: "categories", label: "可用品类（逗号分隔）", value: l.categories.join(", ") },
-          { name: "guarantee", label: "年保底（元）", type: "number", value: l.guarantee },
           { type: "select", name: "exclusive", label: "授权方式", value: String(l.exclusive), options: [{ value: "true", text: "独占授权" }, { value: "false", text: "普通授权" }] },
+          { type: "html", html: `<div class="meta">财务条款留空表示不变；如填写则自 <b>${nextMonth}</b>（下一起账月）起分段生效，既往账期一律不重算。<br>当年保底 ${money(l.guarantee)}；当前费率 ${l.tiers.map(t => `${(t.rate * 100).toFixed(t.rate * 100 % 1 ? 1 : 0)}%/≤${t.upTo ?? "∞"}`).join(" → ")}</div>` },
+          { name: "guarantee", label: "新年度保底（元，留空=不变）", type: "number", value: "", placeholder: "如 18000" },
+          { name: "tierText", label: "新阶梯费率（留空=不变；格式 上限:费率，逗号分隔，无上限用 *）", value: "", placeholder: "10000:0.05, 50000:0.08, *:0.12" },
           { name: "reason", label: "变更原因", value: "合同补充协议" },
         ],
         submitLabel: "提交变更",
-        onSubmit: d => api("POST", `/api/licenses/${l.id}/change`, {
-          reason: d.reason,
-          patch: {
+        onSubmit: d => {
+          const patch = {
             licensee: d.licensee,
             regions: d.regions.split(/[,，]/).map(s => s.trim()).filter(Boolean),
             categories: d.categories.split(/[,，]/).map(s => s.trim()).filter(Boolean),
-            guarantee: Number(d.guarantee),
             exclusive: d.exclusive === "true",
-          },
-        }).then(() => { toast("变更已记录（若造成冲突将被拒绝并回滚）"); return refresh(); }),
+          };
+          const g = String(d.guarantee ?? "").trim();
+          if (g !== "") patch.guarantee = Number(g);
+          const t = String(d.tierText || "").trim();
+          if (t) {
+            const tiers = t.split(/[,，]/).map(s => s.trim()).filter(Boolean).map((part, i, arr) => {
+              const [cap, rate] = part.split(":").map(x => x.trim());
+              if (rate === undefined) throw new Error(`第 ${i + 1} 档格式应为 上限:费率`);
+              return { upTo: cap === "*" ? null : Number(cap), rate: Number(rate) };
+            });
+            patch.tiers = tiers;
+          }
+          patch.effectiveFromMonth = nextMonth;
+          return api("POST", `/api/licenses/${l.id}/change`, { reason: d.reason, patch })
+            .then(() => { toast(`变更已记录${g !== "" || t ? `；新条款自 ${nextMonth} 起生效，既往不重算` : ""}，若造成权利冲突将被拒绝`); return refresh(); });
+        },
       });
     };
     window.licReportSale = () => {
       const l = getSel();
+      const currentMonth = state.today.slice(0, 7);
       openDialog({
         title: `${l.id} 回款销量上报（阶梯计提）`,
         fields: [
-          { name: "period", label: "销售账期", value: "2026-03", placeholder: "YYYY-MM", required: true },
+          { name: "period", label: `销售账期（不得晚于当前账期 ${currentMonth}）`, value: currentMonth, placeholder: "YYYY-MM", required: true },
           { name: "amount", label: "本期回款销售额（元）", type: "number", required: true, placeholder: "60000" },
           { name: "units", label: "销售件数", type: "number", value: 0 },
           { name: "idempotencyKey", label: "上报凭证号（防重复）", required: true, value: "S-" + crypto.randomUUID().slice(0, 8) },
@@ -708,8 +740,11 @@
     // ---- 渲染 ----
     function motifName(id) { return state.motifs.find(m => m.id === id)?.name || id; }
     function renderMotifSelect() {
-      lf.querySelector("select[name=motifId]").innerHTML = state.motifs
+      const sel = lf.querySelector("select[name=motifId]");
+      const keep = sel.value;
+      sel.innerHTML = state.motifs
         .map(m => `<option value="${m.id}">${esc(m.id)} · ${esc(m.name)}（${esc(m.author)}）</option>`).join("");
+      if (state.motifs.some(m => m.id === keep)) sel.value = keep;
     }
     window.selectLicense = id => { selectedId = id; renderAll(); };
     function renderList() {
@@ -725,7 +760,7 @@
           </div>
         </article>`).join("") || `<div class="empty">暂无授权</div>`;
     }
-    function typeLabel(t) { return { create: "设立", renewal: "续期", terminate: "终止", change: "变更" }[t] || t; }
+    function typeLabel(t) { return { create: "设立", renewal: "续期", terminate: "终止", change: "变更", migration: "数据迁移" }[t] || t; }
     function renderDetail() {
       const l = getSel();
       $("#licToday").textContent = `· 计提账期基准日 ${state.today}`;
@@ -756,12 +791,13 @@
           <dt>可用地区</dt><dd>${l.regions.map(esc).join("、")}</dd>
           <dt>可用品类</dt><dd>${l.categories.map(esc).join("、")}</dd>
           <dt>阶梯费率</dt><dd>${esc(tierText)}</dd>
-          <dt>年度保底</dt><dd>${money(l.guarantee)}（月保底 ${money(roy.floor)}，不足部分当月抵扣补足）</dd>
+          <dt>年度保底</dt><dd>${money(l.guarantee)}（当前月保底 ${money(roy.floor)}，不足部分当月抵扣补足）</dd>
+          <dt>条款分段</dt><dd>${roy.terms.map(t => `${t.fromMonth} 起：${(t.guarantee || 0) ? money(t.guarantee) + "/年" : "无保底"}，${t.tiers.map(x => `${(x.rate * 100).toFixed(x.rate * 100 % 1 ? 1 : 0)}%/≤${x.upTo ?? "∞"}`).join("→")}`).join("；<br>")}</dd>
         </dl>
         <h3 style="margin:14px 0 6px;font-size:15px">逐期版税计提（退货按原账期冲减）</h3>
         <table class="roy">
           <thead><tr><th>账期</th><th>销售</th><th>退货</th><th>净额</th><th>计提版税</th><th>保底抵扣</th><th>应付合计</th></tr></thead>
-          <tbody>${roy.rows.map(r => `<tr${r.net < 0 ? ' style="color:var(--red)"' : ""}><td>${r.period}</td><td>${money(r.sales)}</td><td>${money(r.returns)}</td><td>${money(r.net)}</td><td>${money(r.earnedRoyalty)}</td><td>${money(r.guaranteeOffset)}</td><td>${money(r.payable)}</td></tr>`).join("")}</tbody>
+          <tbody>${roy.rows.map(r => `<tr${r.net < 0 ? ' style="color:var(--red)"' : ""}><td>${r.period}${r.termFrom && r.termFrom !== l.terms[0].fromMonth ? ` <span class="badge norm" title="本期适用新生效条款">条款 ${r.termFrom}</span>` : ""}</td><td>${money(r.sales)}</td><td>${money(r.returns)}</td><td>${money(r.net)}</td><td>${money(r.earnedRoyalty)}</td><td>${money(r.guaranteeOffset)}</td><td>${money(r.payable)}</td></tr>`).join("")}</tbody>
           <tfoot><tr><td>累计</td><td>${money(roy.total.sales)}</td><td>${money(roy.total.returns)}</td><td>${money(roy.total.net)}</td><td>${money(roy.total.earnedRoyalty)}</td><td>${money(roy.total.guaranteeOffset)}</td><td>${money(roy.total.payable)}</td></tr></tfoot>
         </table>
         <h3 style="margin:14px 0 6px;font-size:15px">上报流水</h3>
@@ -778,6 +814,7 @@
             if (v.type === "create") detail = `设立授权，到期 ${v.endDate}`;
             if (v.type === "renewal") detail = `${v.startDate} 起续期至 ${v.endDate}`;
             if (v.type === "terminate") detail = `${v.terminateDate} 终止：${esc(v.note)}`;
+            if (v.type === "migration") detail = esc(v.note);
             if (v.type === "change") {
               const b = v.snapshot.before, a = v.snapshot.after;
               const diffs = [];
@@ -786,6 +823,10 @@
               if (b.exclusive !== a.exclusive) diffs.push(`方式：${b.exclusive ? "独占" : "普通"} → ${a.exclusive ? "独占" : "普通"}`);
               if (b.guarantee !== a.guarantee) diffs.push(`保底：${b.guarantee} → ${a.guarantee}`);
               if (b.licensee !== a.licensee) diffs.push(`被授权方：${b.licensee} → ${a.licensee}`);
+              if (v.snapshot.termChange) {
+                const tc = v.snapshot.termChange;
+                diffs.push(`财务条款自 ${tc.fromMonth} 起分段生效（既往账期不重算）：保底 ${tc.guarantee}/年，费率 ${tc.tiers.map(t => `${(t.rate * 100).toFixed(t.rate * 100 % 1 ? 1 : 0)}%/≤${t.upTo ?? "∞"}`).join("→")}`);
+              }
               detail = diffs.join("；") || "要素无变化";
             }
             return `<div class="ev ${v.type}"><b>${typeLabel(v.type)}</b> · ${v.at.replace("T", " ").slice(0, 16)}<br><span class="meta">${detail}<br>${esc(v.note)}</span></div>`;
