@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>小型漆线雕工坊管理</title>
+  <style>
+    :root {
+      --bg: #eef3f0;
+      --panel: #ffffff;
+      --ink: #1e2624;
+      --muted: #62706b;
+      --line: #ccd8d2;
+      --teal: #1f6b68;
+      --red: #a43f42;
+      --amber: #aa7a24;
+      --violet: #665c93;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--ink); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    header { padding: 22px 28px 16px; border-bottom: 1px solid var(--line); background: #fbfdfb; display: flex; justify-content: space-between; gap: 18px; align-items: end; }
+    h1 { margin: 0; font-size: 26px; letter-spacing: 0; }
+    .sub, .meta { color: var(--muted); font-size: 13px; line-height: 1.5; }
+    main { padding: 20px 28px 34px; display: grid; gap: 18px; }
+    button, input, select, textarea { font: inherit; border-radius: 6px; }
+    input, select, textarea { width: 100%; border: 1px solid var(--line); padding: 9px 10px; background: #fff; color: var(--ink); }
+    textarea { min-height: 68px; resize: vertical; }
+    button { border: 0; background: var(--teal); color: #fff; padding: 9px 11px; cursor: pointer; min-height: 38px; }
+    button.secondary { background: #5d6764; }
+    button.warn { background: var(--amber); }
+    button.danger { background: var(--red); }
+    button.violet { background: var(--violet); }
+    label { display: grid; gap: 5px; font-size: 12px; color: var(--muted); }
+    .top { display: grid; grid-template-columns: 360px 1fr; gap: 18px; align-items: start; }
+    .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px; }
+    .panel h2 { margin: 0 0 12px; font-size: 17px; }
+    form { display: grid; gap: 10px; }
+    .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .toolbar { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 12px; }
+    .lists { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 16px; }
+    .mini { border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: #fbfdfb; min-height: 118px; }
+    .mini h3 { margin: 0 0 8px; font-size: 14px; }
+    .item { border: 1px solid #d7e0dc; border-left: 4px solid var(--teal); background: #fff; border-radius: 7px; padding: 9px; margin-bottom: 8px; cursor: pointer; }
+    .item.overdue { border-left-color: var(--red); }
+    .board { display: grid; grid-template-columns: repeat(4, minmax(185px, 1fr)); gap: 12px; overflow-x: auto; }
+    .col { background: #f9fbf9; border: 1px solid var(--line); border-radius: 8px; padding: 10px; min-height: 320px; }
+    .col h3 { display: flex; justify-content: space-between; margin: 0 0 10px; font-size: 15px; }
+    .actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 8px; }
+    .actions button { flex: 1; min-width: 82px; font-size: 12px; padding: 7px 8px; }
+    dialog { border: 1px solid var(--line); border-radius: 8px; width: min(560px, calc(100vw - 24px)); padding: 0; }
+    dialog::backdrop { background: rgba(0, 0, 0, 0.3); }
+    .dialog-body { padding: 16px; display: grid; gap: 10px; }
+    .empty { color: var(--muted); font-size: 13px; padding: 8px 0; }
+    @media (max-width: 980px) {
+      header { display: block; padding: 18px; }
+      main { padding: 16px; }
+      .top, .lists, .toolbar { grid-template-columns: 1fr; }
+      .grid2 { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>小型漆线雕工坊管理</h1>
+      <div class="sub">贴线、阴干、上金粉、待交付的作品流转与缺陷追踪</div>
+    </div>
+    <button id="exportBtn" class="secondary">导出 JSON</button>
+  </header>
+
+  <main>
+    <section class="top">
+      <form id="workForm" class="panel">
+        <h2>新增作品</h2>
+        <div class="grid2">
+          <label>胎体材质<input name="base" required placeholder="脱胎漆器"></label>
+          <label>纹样主题<input name="theme" required placeholder="缠枝莲"></label>
+        </div>
+        <div class="grid2">
+          <label>线条粗细<select name="line"><option>细线</option><option>中线</option><option>粗线</option><option>混合线</option></select></label>
+          <label>贴线进度<input name="progress" type="number" min="0" max="100" value="25"></label>
+        </div>
+        <div class="grid2">
+          <label>阴干日期<input name="dryDate" type="date" required></label>
+          <label>交付日期<input name="delivery" type="date" required></label>
+        </div>
+        <div class="grid2">
+          <label>金粉处理状态<select name="gold"><option>未处理</option><option>试扫粉</option><option>已上金粉</option></select></label>
+          <label>当前状态<select name="status"><option>贴线中</option><option>待阴干</option><option>上金粉</option><option>待交付</option></select></label>
+        </div>
+        <label>缺陷位置<input name="defect" placeholder="右下花瓣断线"></label>
+        <label>备注<textarea name="note" placeholder="客户偏好、修补记录"></textarea></label>
+        <button type="submit">加入工坊</button>
+      </form>
+
+      <section class="panel">
+        <h2>今日与风险</h2>
+        <div class="lists">
+          <div class="mini">
+            <h3>今日待阴干</h3>
+            <div id="todayDry"></div>
+          </div>
+          <div class="mini">
+            <h3>缺陷作品</h3>
+            <div id="defectList"></div>
+          </div>
+          <div class="mini">
+            <h3>最近交付</h3>
+            <div id="deliveryList"></div>
+          </div>
+        </div>
+        <div class="toolbar">
+          <label>主题筛选<input id="themeFilter" placeholder="输入纹样"></label>
+          <label>状态筛选<select id="statusFilter"></select></label>
+          <label>交付排序<select id="sortMode"><option value="delivery">按交付日期</option><option value="dry">按阴干日期</option></select></label>
+          <button id="clearFilters" class="secondary">清空</button>
+        </div>
+        <div id="board" class="board"></div>
+      </section>
+    </section>
+  </main>
+
+  <dialog id="detailDialog">
+    <div class="dialog-body">
+      <h2 id="detailTitle">作品详情</h2>
+      <div id="detailContent" class="meta"></div>
+      <label>记录缺陷
+        <input id="defectInput" placeholder="断线/翘线位置">
+      </label>
+      <div class="actions">
+        <button id="saveDefect" class="warn">保存缺陷</button>
+        <button id="closeDialog" class="secondary">关闭</button>
+      </div>
+    </div>
+  </dialog>
+
+  <script>
+    const statuses = ["贴线中", "待阴干", "上金粉", "待交付"];
+    const storageKey = "zfl42Works";
+    const today = new Date().toISOString().slice(0, 10);
+    const seed = [
+      { id: crypto.randomUUID(), base: "木胎香盒", theme: "海水江崖", line: "细线", progress: 70, dryDate: today, gold: "未处理", defect: "", delivery: "2026-06-26", status: "待阴干", note: "边线需保持低浮雕感", logs: ["创建作品"] },
+      { id: crypto.randomUUID(), base: "脱胎盘", theme: "折枝梅", line: "混合线", progress: 95, dryDate: "2026-06-20", gold: "试扫粉", defect: "左侧枝干翘线", delivery: "2026-06-23", status: "上金粉", note: "客户要求金粉偏暗", logs: ["创建作品", "记录翘线"] },
+      { id: crypto.randomUUID(), base: "竹胎笔筒", theme: "云雷纹", line: "中线", progress: 40, dryDate: "2026-06-24", gold: "未处理", defect: "", delivery: "2026-06-30", status: "贴线中", note: "", logs: ["创建作品"] }
+    ];
+    let works = JSON.parse(localStorage.getItem(storageKey) || "null") || seed;
+    let activeId = null;
+
+    const form = document.querySelector("#workForm");
+    const board = document.querySelector("#board");
+    const statusFilter = document.querySelector("#statusFilter");
+    const themeFilter = document.querySelector("#themeFilter");
+    const sortMode = document.querySelector("#sortMode");
+    const dialog = document.querySelector("#detailDialog");
+
+    form.dryDate.value = today;
+    form.delivery.value = new Date(Date.now() + 5 * 86400000).toISOString().slice(0, 10);
+    statusFilter.innerHTML = `<option value="">全部状态</option>` + statuses.map(s => `<option>${s}</option>`).join("");
+
+    function save() {
+      localStorage.setItem(storageKey, JSON.stringify(works));
+    }
+
+    function filtered() {
+      return works
+        .filter(w => !statusFilter.value || w.status === statusFilter.value)
+        .filter(w => !themeFilter.value || w.theme.includes(themeFilter.value.trim()))
+        .sort((a, b) => (a[sortMode.value] || "").localeCompare(b[sortMode.value] || ""));
+    }
+
+    function updateStatus(id, status) {
+      const work = works.find(w => w.id === id);
+      work.status = status;
+      if (status === "待阴干") work.dryDate = new Date().toISOString().slice(0, 10);
+      if (status === "上金粉") work.gold = "已上金粉";
+      if (status === "待交付") work.progress = 100;
+      work.logs.push(`${new Date().toLocaleString()} 更新为 ${status}`);
+      save();
+      render();
+    }
+
+    function recordDefect(id, text) {
+      const work = works.find(w => w.id === id);
+      const value = text || prompt("输入断线/翘线位置");
+      if (!value) return;
+      work.defect = work.defect ? `${work.defect}; ${value}` : value;
+      work.logs.push(`${new Date().toLocaleString()} 缺陷：${value}`);
+      save();
+      render();
+    }
+
+    function showDetail(id) {
+      activeId = id;
+      const w = works.find(item => item.id === id);
+      document.querySelector("#detailTitle").textContent = `${w.theme} · ${w.base}`;
+      document.querySelector("#detailContent").innerHTML = `
+        胎体材质：${w.base}<br>线条粗细：${w.line}<br>贴线进度：${w.progress}%<br>
+        阴干日期：${w.dryDate}<br>金粉状态：${w.gold}<br>缺陷位置：${w.defect || "无"}<br>
+        交付日期：${w.delivery}<br>当前状态：${w.status}<br>备注：${w.note || "无"}<br>
+        流转记录：${w.logs.join(" / ")}
+      `;
+      document.querySelector("#defectInput").value = "";
+      dialog.showModal();
+    }
+
+    function renderSummaries() {
+      const todayDry = works.filter(w => w.dryDate <= today && w.status === "待阴干");
+      const defects = works.filter(w => w.defect);
+      const delivery = [...works].sort((a, b) => a.delivery.localeCompare(b.delivery)).slice(0, 4);
+      document.querySelector("#todayDry").innerHTML = todayDry.length ? todayDry.map(w => `<div class="item" onclick="showDetail('${w.id}')"><b>${w.theme}</b><div class="meta">${w.base} · ${w.dryDate}</div></div>`).join("") : `<div class="empty">暂无</div>`;
+      document.querySelector("#defectList").innerHTML = defects.length ? defects.map(w => `<div class="item overdue" onclick="showDetail('${w.id}')"><b>${w.theme}</b><div class="meta">${w.defect}</div></div>`).join("") : `<div class="empty">暂无</div>`;
+      document.querySelector("#deliveryList").innerHTML = delivery.map(w => `<div class="item" onclick="showDetail('${w.id}')"><b>${w.theme}</b><div class="meta">${w.delivery} · ${w.status}</div></div>`).join("");
+    }
+
+    function renderBoard() {
+      const list = filtered();
+      board.innerHTML = statuses.map(status => {
+        const cards = list.filter(w => w.status === status);
+        return `<section class="col">
+          <h3><span>${status}</span><span>${cards.length}</span></h3>
+          ${cards.length ? cards.map(w => `<article class="item ${w.defect ? "overdue" : ""}" onclick="showDetail('${w.id}')">
+            <b>${w.theme}</b>
+            <div class="meta">${w.base} · ${w.line}<br>进度 ${w.progress}% · 阴干 ${w.dryDate}<br>金粉：${w.gold} · 交付：${w.delivery}<br>${w.defect ? "缺陷：" + w.defect : "缺陷：无"}</div>
+            <div class="actions" onclick="event.stopPropagation()">
+              ${statuses.map(s => `<button class="${s === status ? "secondary" : ""}" onclick="updateStatus('${w.id}', '${s}')">${s}</button>`).join("")}
+              <button class="warn" onclick="recordDefect('${w.id}')">记缺陷</button>
+            </div>
+          </article>`).join("") : `<div class="empty">暂无作品</div>`}
+        </section>`;
+      }).join("");
+    }
+
+    function render() {
+      renderSummaries();
+      renderBoard();
+    }
+
+    form.addEventListener("submit", event => {
+      event.preventDefault();
+      const data = Object.fromEntries(new FormData(form).entries());
+      works.unshift({
+        id: crypto.randomUUID(),
+        base: data.base,
+        theme: data.theme,
+        line: data.line,
+        progress: Number(data.progress),
+        dryDate: data.dryDate,
+        gold: data.gold,
+        defect: data.defect,
+        delivery: data.delivery,
+        status: data.status,
+        note: data.note,
+        logs: [`${new Date().toLocaleString()} 创建作品`]
+      });
+      form.reset();
+      form.dryDate.value = today;
+      form.delivery.value = new Date(Date.now() + 5 * 86400000).toISOString().slice(0, 10);
+      save();
+      render();
+    });
+
+    document.querySelector("#saveDefect").addEventListener("click", () => {
+      recordDefect(activeId, document.querySelector("#defectInput").value.trim());
+      showDetail(activeId);
+    });
+    document.querySelector("#closeDialog").addEventListener("click", () => dialog.close());
+    document.querySelector("#clearFilters").addEventListener("click", () => {
+      themeFilter.value = "";
+      statusFilter.value = "";
+      render();
+    });
+    [statusFilter, themeFilter, sortMode].forEach(el => el.addEventListener("input", render));
+    document.querySelector("#exportBtn").addEventListener("click", () => {
+      const blob = new Blob([JSON.stringify(works, null, 2)], { type: "application/json" });
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = "lacquer-thread-works.json";
+      link.click();
+      URL.revokeObjectURL(link.href);
+    });
+
+    window.updateStatus = updateStatus;
+    window.recordDefect = recordDefect;
+    window.showDetail = showDetail;
+    save();
+    render();
+  </script>
+</body>
+</html>
